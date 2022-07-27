@@ -31,26 +31,43 @@ from utils.data import load_data
 class Namespace:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
-        
-        
+
+
 def get_performance(task, task_train_data, task_dev_data, k, trim_dev_data, gpt2, checkpoint, prompt_seed,
-                    add_newlines=True, save_predictions=True):
+                    sampling_weights, is_classification, add_newlines=True, save_predictions=True, only_top_n=None):
     random.seed(prompt_seed)
+    np.random.seed(prompt_seed)
     #                 curr_dev_data = random.sample(task_train_data, args.trim_dev_data)
-    curr_dev_data = task_dev_data[:trim_dev_data]
-    curr_train_data = random.sample(task_train_data, k)
-    assert len(curr_dev_data)>0
+    curr_dev_data = task_dev_data[:trim_dev_data] if trim_dev_data is not None else task_dev_data
+    if sampling_weights is not None:
+        if only_top_n is not None:
+            # sample k uniformly from the top n
+            if only_top_n == 0:
+                # if n is 0, set n = k
+                only_top_n = k
+            top_n_train_data = sorted(list(zip(task_train_data, sampling_weights)), key=lambda x: x[1])[:only_top_n]
+            top_n_train_data, top_k_sampling_weights = zip(*top_n_train_data)
+            curr_train_data = np.random.choice(top_n_train_data, size=k, replace=False).tolist()
+        else:
+            # sample k examples from the training data weighted by the weights given
+            curr_train_data = np.random.choice(task_train_data, size=k, replace=False, p=sampling_weights).tolist()
+        # to make sure example order is not impacted by weight
+        curr_train_data = random.sample(curr_train_data, k)
+    else:
+        # sample k randomly from the train data
+        curr_train_data = random.sample(task_train_data, k)
+    # assert len(curr_dev_data)>0
     assert not args.use_demonstrations or len(curr_train_data)==k, \
             (args.use_demonstrations, len(curr_train_data), k)
 
-    config_file = "config/tasks/{}.json".format(task)
-    assert os.path.exists(config_file), config_file
-    with open(config_file, "r") as f:
-        config = json.load(f)
-    is_classification = config["task_type"]=="classification"
-    if is_classification:
-        options = curr_dev_data[0]["options"]
-        assert np.all([d["options"]==options for d in curr_dev_data])
+    # config_file = "config/tasks/{}.json".format(task)
+    # assert os.path.exists(config_file), config_file
+    # with open(config_file, "r") as f:
+    #     config = json.load(f)
+    # is_classification = config["task_type"]=="classification"
+    # if is_classification:
+    #     options = curr_dev_data[0]["options"]
+    #     assert np.all([d["options"]==options for d in curr_dev_data])
 
     result = run(logger, task, metaicl_data, metaicl_model,
                  curr_train_data, curr_dev_data, seed, checkpoint, is_classification, add_newlines, args,
@@ -116,7 +133,7 @@ def run(logger, task, metaicl_data, metaicl_model, train_data, dev_data, seed,
             metaicl_model.cuda()
             metaicl_model.eval()
 
-        losses = metaicl_model.do_inference(metaicl_data, args.test_batch_size)
+        losses = metaicl_model.do_inference(metaicl_data, args.test_batch_size, verbose=True)
         # with open(cache_path, "wb") as f:
         #     pkl.dump(losses, f)
 
@@ -151,8 +168,6 @@ def run(logger, task, metaicl_data, metaicl_model, train_data, dev_data, seed,
     return perf
 
 
-# In[3]:
-
 if __name__ == '__main__':
     args = Namespace()
     args.gpt2 = 'gpt2-large'
@@ -164,8 +179,8 @@ if __name__ == '__main__':
     args.k = 16
     args.total_data_size = 200
     args.out_dir = None
-    # args.test_batch_size = 8
-    args.test_batch_size = 16
+    args.test_batch_size = 8
+    # args.test_batch_size = 16
     args.method = 'direct'
     args.task = 'custom'
     args.unseen_domain_only = False
@@ -174,19 +189,28 @@ if __name__ == '__main__':
     args.is_null = False
     # args.out_dir = 'results/results_gptj'
     # args.out_dir = 'results/results_gpt2'
-    args.out_dir = 'results/results_gpt2finetuned'
+    args.out_dir = 'results/results_gpt2finetuned_uncertainty_sampling_top_n32'
+    # args.out_dir = 'results/results_gpt2_prompt_with_random_tasks'
+    # args.out_dir = 'results/results_gpt2finetuned_prompt_with_random_tasks'
+    # args.out_dir = 'results/results_gpt2_uncertainty_sampling'
+    # args.out_dir = 'results/results_gpt2_uncertainty_sampling_top_n32'
     args.seed = '100'
     args.use_random_english_words = False
     args.use_calibration = False
     args.num_prompt_samples = 32
     args.ks = [0, 1, 2, 4, 8, 16, 32]
-    args.trim_dev_data = 32
+    args.trim_dev_data = None
     args.gpt2s = 'gpt2-large'
     args.checkpoints = 'checkpoints/metaicl/hr_to_lr/model.pt'
     # args.gpt2s = 'gpt2-large'
     # args.checkpoints = 'gpt2-large'
     # args.gpt2s = 'gpt-j-6B'
     # args.checkpoints = 'gpt-j-6B'
+    args.prompt_with_random_tasks = False
+    args.sampling_weights_dir = 'results/results_gpt2/uncertainty_sampling'
+    args.sampling_weights_dir = None
+    args.top_n = 32
+    # args.top_n = 0
 
 
     # In[4]:
@@ -208,7 +232,7 @@ if __name__ == '__main__':
 
 
     from tqdm import tqdm
-    df = pd.DataFrame([])
+    df = pd.DataFrame([], columns=['k', 'task', 'prompt_seed',  'train_samples', 'result', 'gpt2', 'checkpoint'])
     if os.path.exists(os.path.join(args.out_dir, 'results.csv')):
         df = pd.read_csv(os.path.join(args.out_dir, 'results.csv'))
     errors = []
@@ -268,10 +292,16 @@ if __name__ == '__main__':
 
         for seed in seeds:
             ### data ...
-            train_data = load_data(args.task, "train", 200, seed=seed, config_split=config_split,
+            train_data = load_data(args.task, "train", args.total_data_size, seed=seed, config_split=config_split,
                                    datasets=None if args.dataset is None else args.dataset.split(","))
-            dev_data = load_data(args.task, args.split, 200, seed=seed, config_split=config_split,
+            dev_data = load_data(args.task, args.split, args.total_data_size, seed=seed, config_split=config_split,
                                  datasets=None if args.dataset is None else args.dataset.split(","), is_null=args.is_null)
+
+            if args.use_random_english_words:
+                from english_words import english_words_set
+
+                english_words_set = sorted(english_words_set)
+                np.random.seed(int(seed))
 
             train_counter = Counter()
             dev_counter = Counter()
@@ -288,7 +318,45 @@ if __name__ == '__main__':
 
             for test_task in list(dev_counter):
                 task_dev_data = [dp for dp in dev_data if dp["task"]==test_task]
-                task_train_data = [dp for dp in train_data if dp["task"]==test_task]
+                if args.prompt_with_random_tasks:
+                    task_train_data = [dp for dp in train_data if dp["task"]!=test_task]
+                else:
+                    task_train_data = [dp for dp in train_data if dp["task"]==test_task]
+
+                if args.sampling_weights_dir is not None:
+                    assert not args.prompt_with_random_tasks
+                    # with open(os.path.join(args.sampling_weights_dir, test_task + '.pkl'), 'rb') as f:
+                    task_weights = np.load(os.path.join(args.sampling_weights_dir, test_task + '.npy'))
+                    task_weights = task_weights / task_weights.sum(keepdims=True)
+                else:
+                    task_weights = None
+
+                assert len(task_dev_data) > 0
+                assert not args.use_demonstrations or len(task_train_data) == args.total_data_size or args.prompt_with_random_tasks, \
+                    (args.use_demonstrations, len(task_train_data), args.total_data_size, args.prompt_with_random_tasks)
+
+                config_file = "config/tasks/{}.json".format(test_task)
+                assert os.path.exists(config_file), config_file
+                with open(config_file, "r") as f:
+                    config = json.load(f)
+                is_classification = config["task_type"] == "classification"
+                if is_classification:
+                    options = task_dev_data[0]["options"]
+                    assert np.all([d["options"] == options for d in task_dev_data])
+                if args.use_random_english_words:
+                    # create a mapping
+                    options = task_dev_data[0]["options"]
+                    mapping = {option: np.random.choice(english_words_set) for option in options}
+                    new_options = list(mapping.values())
+                    for dp_idx, dp in enumerate(task_train_data):
+                        assert dp["output"] in options, (dp, options)
+                        task_train_data[dp_idx]["output"] = mapping[dp["output"]]
+                        task_train_data[dp_idx]["options"] = new_options
+                    for dp_idx, dp in enumerate(task_dev_data):
+                        assert dp["output"] in options, (dp, options)
+                        task_dev_data[dp_idx]["output"] = mapping[dp["output"]]
+                        task_dev_data[dp_idx]["options"] = new_options
+
                 for curr_k in args.ks:
                     print('for k = %i' % curr_k)
                     args.k = curr_k
@@ -303,7 +371,8 @@ if __name__ == '__main__':
                             continue
                         result = get_performance(
                             test_task, task_train_data, task_dev_data, args.k, args.trim_dev_data, args.gpt2,
-                            checkpoint, prompt_seed, save_predictions=False,
+                            checkpoint, prompt_seed, task_weights, is_classification, save_predictions=False,
+                            only_top_n=args.top_n
                         )
                         if isinstance(result, dict):
                             df = pd.concat([df, pd.DataFrame([result])])
