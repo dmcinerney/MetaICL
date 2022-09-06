@@ -23,7 +23,9 @@ def load_data(task, split, k, seed=0, config_split=None, datasets=None,
 
     data = []
     for dataset in datasets:
-        data_path = os.path.join("data", dataset,
+        # data_path = os.path.join("data", dataset,
+        #                          "{}_{}_{}_{}.jsonl".format(dataset, k, seed, split))
+        data_path = os.path.join('/scratch/mcinerney.de/metaicl', "data", dataset,
                                  "{}_{}_{}_{}.jsonl".format(dataset, k, seed, split))
         with open(data_path, "r") as f:
             for line in f:

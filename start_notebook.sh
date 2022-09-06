@@ -4,6 +4,7 @@ module load discovery/2019-02-21
 #source activate jpt
 source activate metaicl
 ssh login-01 -f -N -T -R 8902:localhost:8902
-ssh login-01 -f -N -T -R 6060:localhost:6060
+ssh login-01 -f -N -T -R 6061:localhost:6061
 export TOKENIZERS_PARALLELISM=false
+. set_hf_caches.sh
 jupyter notebook --port 8902
