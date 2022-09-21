@@ -35,16 +35,13 @@ class Namespace:
         self.__dict__.update(kwargs)
 
 
-def get_prompt_and_dev(k, prompt_seed, task_train_data, task_dev_data, trim_dev_data, sampling_weights, prompt_indices,
-                       only_top_n=None, sample_dev=False):
+def get_prompt_and_dev(k, prompt_seed, task_train_data, task_dev_data, sampling_weights, prompt_indices,
+                       only_top_n=None, subsample_dev=None):
     assert sampling_weights is None or prompt_indices is None
     random.seed(prompt_seed)
     np.random.seed(prompt_seed)
-    if trim_dev_data is not None:
-        if sample_dev:
-            curr_dev_data = random.sample(task_dev_data, trim_dev_data)
-        else:
-            curr_dev_data = task_dev_data[:trim_dev_data]
+    if subsample_dev is not None:
+        curr_dev_data = random.sample(task_dev_data, subsample_dev)
     else:
         curr_dev_data = task_dev_data
     task_train_data = [{'index': i, 'instance': x} for i, x in enumerate(task_train_data)]
@@ -99,17 +96,18 @@ def get_performance(task, k, gpt2, checkpoint, prompt_seed, is_classification, t
         'k': args.k,
         'task': task,
         'prompt_seed': prompt_seed,
-        'train_samples': curr_train_data,
+        'split': train_data_split,
+        'train_slice_args': args.train_slice_args,
         'train_indices': str(train_indices),
+        'train_samples': curr_train_data,
+        'dev_slice_args': args.dev_slice_args,
+        'subsample_dev': args.subsample_dev,
+        'checkpoint': checkpoint,
+        'gpt2': gpt2,
         'loss': loss,
         'normalized_loss': normalized_loss,
         'acc': acc,
         'f1': f1,
-        'checkpoint': checkpoint,
-        'gpt2': gpt2,
-        'train_data_split': train_data_split,
-        'evaluated_on': curr_dev_data,
-        'sample_dev': args.sample_dev,
     }
 
 
@@ -214,6 +212,19 @@ def run(logger, task, metaicl_data, metaicl_model, train_data, dev_data, seed,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument("--out_dir", type=str, help="output directory", required=True)
+    parser.add_argument("-s", "--splits", nargs='+',
+                        help="Something like: \"('train', (0, .5), (0, .06), range(125), None, '_1')\"", required=True)
+    parser.add_argument("--test_batch_size", type=int, default=16, help="output directory")
+    parser.add_argument("--gpt2s", type=str, default='gpt2-large')
+    parser.add_argument("--checkpoints", type=str, default='checkpoints/metaicl/hr_to_lr/model.pt')
+    parser.add_argument("--dataset", type=str, default='commonsense_qa')
+    # args.gpt2s = 'gpt2-large'
+    # args.checkpoints = 'checkpoints/metaicl/hr_to_lr/model.pt'
+    # args.gpt2s = 'gpt2-large'
+    # args.checkpoints = 'gpt2-large'
+    # args.gpt2s = 'gpt-j-6B'
+    # args.checkpoints = 'gpt-j-6B'
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for distributed training on gpus")
     args = parser.parse_args()
     # args = Namespace()
@@ -224,19 +235,21 @@ if __name__ == '__main__':
     args.use_demonstrations = True
     args.do_zeroshot = False
     args.k = 32
-    args.train_data_splits = {
-        # 'val': ((.5, .75), 100, 64, True),
-        # 'val2': ((.5, .75), 100, 200, False),
-        'val': ((.5, .75), 100, 200, False),
-        'train': ((0, .5), 2000, 200, False),
-        # 'test': ((.75, 1), 100, 200, False),
-        # 'all': ((0, .5), 8, 200),
-    }
+    args.splits = [eval(split) for split in args.splits]
+    # args.splits = [
+    #     # 'val': ((.5, .75), 100, 64, True),
+    #     # 'val2': ((.5, .75), 100, 200, False),
+    #     # 'val': ((.5, .75), 100, 200, False),
+    #     # 'val': ((.5, .75), 100, 200, True),
+    #     # ('train', (0, .5), range(500), 200, True),
+    #     # 'train': ((0, .5), range(500, 1000), 200, True),
+    #     # 'test': ((.75, 1), 100, 200, False),
+    #     # 'all': ((0, .5), 8, 200),
+    # ]
     # args.total_data_size = 500
     # args.total_data_size = 200
     # args.out_dir = None
     # args.test_batch_size = 4
-    args.test_batch_size = 16
     args.method = 'direct'
     args.task = 'custom'
     # args.task = 'custom_inst'
@@ -250,7 +263,7 @@ if __name__ == '__main__':
     # args.dataset = 'biomrc'
 
     # args.dataset = 'commonsense_qa,medical_questions_pairs,poem_sentiment,climate_fever,qasc'
-    args.dataset = 'commonsense_qa'
+    # args.dataset = 'commonsense_qa'
     # args.dataset = 'medical_questions_pairs'
     # args.dataset = 'poem_sentiment'
     # args.dataset = 'climate_fever'
@@ -263,7 +276,8 @@ if __name__ == '__main__':
     # args.out_dir = 'results/results_gptj'
     # args.out_dir = 'results/results_gpt2meta'
     # args.out_dir = 'results/results_gpt2meta2'
-    args.out_dir = 'results/results_gpt2meta3'
+    # args.out_dir = 'results/results_gpt2meta3'
+    # args.out_dir = 'results/results_gpt2meta4_2'
     # args.out_dir = 'results/results_gpt2meta_all'
     # args.out_dir = 'results/results_gpt2meta_regcoef'
     # args.out_dir = 'results/results_gpt2meta_negregcoef'
@@ -294,12 +308,6 @@ if __name__ == '__main__':
     # args.ks = [1, 2, 4, 8, 16, 32]
     # args.trim_dev_data = None
     # args.trim_dev_data = 64
-    args.gpt2s = 'gpt2-large'
-    args.checkpoints = 'checkpoints/metaicl/hr_to_lr/model.pt'
-    # args.gpt2s = 'gpt2-large'
-    # args.checkpoints = 'gpt2-large'
-    # args.gpt2s = 'gpt-j-6B'
-    # args.checkpoints = 'gpt-j-6B'
     args.prompt_with_random_tasks = False
     args.sampling_weights_dir = None
     # args.sampling_weights_dir = 'regcoef/checkpoints-metaicl-hr_to_lr-model.pt'
@@ -430,24 +438,24 @@ if __name__ == '__main__':
 
             for test_task in list(dev_counter):
                 df = pd.DataFrame([], columns=[
-                    'k', 'task', 'prompt_seed',  'train_samples', 'train_indices', 'loss', 'normalized_loss', 'acc',
-                    'train_data_split', 'f1', 'gpt2', 'checkpoint', 'evaluated_on', 'sample_dev'])
-                if os.path.exists(os.path.join(args.out_dir, 'results_%s.csv' % test_task)):
-                    df = pd.read_csv(os.path.join(args.out_dir, 'results_%s.csv' % test_task))
-
-                task_dev_data = [dp for dp in dev_data if dp["task"]==test_task]
+                    'k', 'task', 'prompt_seed', 'split', 'train_slice_args', 'train_indices', 'train_samples',
+                    'dev_slice_args', 'subsample_dev', 'checkpoint', 'gpt2', 'loss', 'normalized_loss', 'acc', 'f1'])
+                all_task_dev_data = [dp for dp in dev_data if dp["task"]==test_task]
                 if args.prompt_with_random_tasks:
                     all_task_train_data = [dp for dp in train_data if dp["task"]!=test_task]
                 else:
                     all_task_train_data = [dp for dp in train_data if dp["task"]==test_task]
-                for train_data_split, (proportion_slice_tuple, num_prompt_samples, trim_dev_data, sample_dev) in \
-                        args.train_data_splits.items():
-                    slice_args = (int(x * len(all_task_train_data)) for x in proportion_slice_tuple)
-                    task_train_data = all_task_train_data[slice(*slice_args)]
+                for (split, train_proportion_slice_tuple, dev_proportion_slice_tuple, prompt_seeds, subsample_dev,
+                     postfix) in args.splits:
+                    args.train_slice_args = [int(x * len(all_task_train_data)) for x in train_proportion_slice_tuple]
+                    args.dev_slice_args = [int(x * len(all_task_dev_data)) for x in dev_proportion_slice_tuple]
+                    task_train_data = all_task_train_data[slice(*args.train_slice_args)]
+                    task_dev_data = all_task_dev_data[slice(*args.dev_slice_args)]
                     args.total_data_size = len(task_train_data)
-                    args.num_prompt_samples = num_prompt_samples
-                    args.trim_dev_data = trim_dev_data
-                    args.sample_dev = sample_dev
+                    args.prompt_seeds = prompt_seeds
+                    args.subsample_dev = subsample_dev
+                    if os.path.exists(os.path.join(args.out_dir, 'results_%s%s.csv' % (test_task, postfix))):
+                        df = pd.read_csv(os.path.join(args.out_dir, 'results_%s%s.csv' % (test_task, postfix)))
 
                     if args.sampling_weights_dir is not None:
                         assert not args.prompt_with_random_tasks and args.prompt_weights_dir is None
@@ -493,12 +501,12 @@ if __name__ == '__main__':
                         #     (curr_k, prompt_seed) for curr_k in args.ks
                         #     for prompt_seed in (range(args.num_prompt_samples) if curr_k > 0 else [0])]
                         def k_to_seeds(k):
-                            if not args.sample_dev:
+                            if args.subsample_dev is None:
                                 if k == 0:
                                     return [0]
                                 if args.sampling_weights_dir is not None and (k == args.top_n or args.top_n == 0):
                                     return [0]
-                            return range(args.num_prompt_samples)
+                            return args.prompt_seeds
                         iterable = [
                             (curr_k, prompt_seed) for curr_k in args.ks
                             for prompt_seed in k_to_seeds(curr_k)]
@@ -517,14 +525,19 @@ if __name__ == '__main__':
                         args.k = curr_k
                         metaicl_data.k = curr_k if not args.finetune else 0
                         train_indices, curr_train_data, curr_dev_data = get_prompt_and_dev(
-                            args.k, prompt_seed, task_train_data, task_dev_data, args.trim_dev_data,
-                            task_weights, prompt_indices, only_top_n=args.top_n, sample_dev=args.sample_dev)
+                            args.k, prompt_seed, task_train_data, task_dev_data,
+                            task_weights, prompt_indices, only_top_n=args.top_n, subsample_dev=args.subsample_dev)
                         rows = df[
+                            (df.k == curr_k) &
                             (df.task == test_task) &
-                            (df.checkpoint == checkpoint) &
                             (df.prompt_seed == prompt_seed) &
-                            (df.train_indices == str(train_indices)) &
-                            (df.train_data_split == train_data_split)]
+                            (df.train_slice_args == str(args.train_slice_args)) &
+                            (df.dev_slice_args == str(args.dev_slice_args)) &
+                            ((df.subsample_dev == subsample_dev)
+                             if subsample_dev is not None else (df.index == df.index)) &
+                            # (df.train_indices == str(train_indices)) &
+                            (df.checkpoint == checkpoint) &
+                            (df['split'] == split)]
                         if len(rows) > 0:
                             if task_prompt_weights is None:
                                 print('found', x)
@@ -533,10 +546,11 @@ if __name__ == '__main__':
                         result = get_performance(
                             test_task, args.k, args.gpt2,
                             checkpoint, prompt_seed, is_classification, train_indices, curr_train_data, curr_dev_data,
-                            args, train_data_split, save_predictions=False, finetune_instead=args.finetune,
+                            args, split, save_predictions=False, finetune_instead=args.finetune,
                         )
                         if isinstance(result, dict):
                             df = pd.concat([df, pd.DataFrame([result])])
-                            df.to_csv(os.path.join(args.out_dir, 'results_%s.csv' % test_task), index=False)
+                            df.to_csv(os.path.join(args.out_dir, 'results_%s%s.csv' % (test_task, postfix)),
+                                      index=False)
                         else:
                             errors.append(result)

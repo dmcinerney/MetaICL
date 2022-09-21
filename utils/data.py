@@ -35,3 +35,66 @@ def load_data(task, split, k, seed=0, config_split=None, datasets=None,
                 data.append(dp)
     return data
 
+
+
+import torch
+import torch.nn.functional as F
+
+
+def get_max_dims(tensors):
+    """
+    Returns None if the tensors are all the same size and the maximum size in
+    each dimension otherwise
+    """
+    if len(tensors) <= 0:
+        return None
+    dim = tensors[0].dim()
+    max_size = [0]*dim
+    different = False
+    for tensor in tensors:
+        if tensor.dim() != dim:
+            raise Exception
+        for i in range(dim):
+            if not different:
+                different = max_size[i] != tensor.size(i)
+            max_size[i] = max(max_size[i], tensor.size(i))
+    if different:
+        return max_size
+    else:
+        return None
+
+
+def pad_and_concat(tensors, max_size=None, auto=True):
+    """
+    Returns concatenated tensors with the added batch dimension being first
+    """
+    if auto:
+        if max_size is not None:
+            raise Exception("Must turn auto off to specify max size.")
+        max_size = get_max_dims(tensors)
+    concatenated_tensor = []
+    for i,tensor in enumerate(tensors):
+        if i == 0:
+            dim = tensor.dim()
+        elif tensor.dim() != dim:
+            raise Exception("Number of dimensions does not match!")
+        if max_size is not None:
+            padding = []
+            for i in range(dim-1, -1, -1):
+                diff = max_size[i]-tensor.size(i)
+                if diff < 0:
+                    raise Exception(
+                        "Tensor dim greater than specified max size!")
+                padding.extend([0, diff])
+            new_tensor = F.pad(tensor, tuple(padding))
+        else:
+            if i == 0:
+                shape = tensor.shape
+            elif tensor.shape != shape:
+                raise Exception(
+                    "When auto is turned off and max_size is None, "\
+                    + "tensor shapes must match!")
+            new_tensor = tensor
+        concatenated_tensor.append(new_tensor.view(1, *new_tensor.size()))
+    concatenated_tensor = torch.cat(concatenated_tensor, 0)
+    return concatenated_tensor
